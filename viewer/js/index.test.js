@@ -397,7 +397,7 @@ describe("continuous page layout", () => {
 
         state.fitMode = 0;
         state.zoom = 1;
-        globalThis.onRenderPage(2);
+        globalThis.onRenderPage(1);
 
         // The new render has only just started; clearing the visible canvas
         // now would blank the page until the render completes (upstream
@@ -407,6 +407,57 @@ describe("continuous page layout", () => {
         await flushPromises();
         expect(canvas.width).toBeGreaterThan(0);
         expect(state.renderCalls.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it("scales existing bitmaps during a pinch and re-renders on release", async () => {
+        const { state, pagesElement } = await setupViewer({ pageCount: 2 });
+        await flushPromises();
+        const rendersBefore = state.renderCalls.length;
+        const [canvas, textLayer] = pagesElement.children[0].children;
+        const bitmapWidth = canvas.width;
+        state.fitMode = 0;
+
+        state.zoom = 0.75;
+        globalThis.onRenderPage(2);
+        state.zoom = 1;
+        globalThis.onRenderPage(2);
+        await flushPromises();
+
+        // No renders while the fingers are down: the old bitmap is stretched
+        // to the new size, and the stale text layer is hidden.
+        expect(state.renderCalls.length).toBe(rendersBefore);
+        expect(canvas.width).toBe(bitmapWidth);
+        expect(canvas.style.width).toBe("100px");
+        expect(textLayer.hidden).toBe(true);
+
+        globalThis.onRenderPage(1);
+        await flushPromises();
+
+        expect(state.renderCalls.length).toBeGreaterThan(rendersBefore);
+        expect(textLayer.hidden).toBe(false);
+    });
+
+    it("frees the offscreen render buffer after each render", async () => {
+        const created = [];
+        const { pagesElement } = await setupViewer({ pageCount: 2 });
+        const createElement = globalThis.document.createElement;
+        globalThis.document.createElement = (tagName) => {
+            const element = createElement(tagName);
+            created.push(element);
+            return element;
+        };
+        // Reload so page entries and their render buffers are created afresh.
+        globalThis.loadDocument();
+        await flushPromises();
+        await flushPromises();
+
+        const visible = new Set(pagesElement.children.map((wrapper) => wrapper.children[0]));
+        const offscreen = created.filter((e) => e.tagName === "canvas" && !visible.has(e));
+        expect(offscreen.length).toBeGreaterThan(0);
+        for (const canvas of offscreen) {
+            expect(canvas.width).toBe(0);
+            expect(canvas.height).toBe(0);
+        }
     });
 
     it("publishes the fit zoom computed for the new layout", async () => {

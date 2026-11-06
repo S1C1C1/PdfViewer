@@ -26,6 +26,8 @@ class PdfJsChannel(private val viewModel: PdfViewModel) {
 
     @JavascriptInterface
     fun setCurrentPage(page: Int) {
+        // The WebView is treated as untrusted, so reject impossible pages.
+        if (page !in 1..viewModel.numPages.value) return
         viewModel.setPage(page)
         viewModel.showPageIndicator()
     }

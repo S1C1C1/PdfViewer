@@ -149,13 +149,18 @@ function applyContainerInsets(layout = null) {
 }
 
 // (Re)size a wrapper to its viewport. CSP-safe: property writes only.
-function sizeWrapper(p, layout = null) {
+function sizeWrapperBox(p, layout = null) {
     const vp = pageViewport(p.pdfPage, layout);
     p.viewport = vp;
     const a = availSize(layout);
-    const offsetX = Math.max(0, (a.width - vp.width) / 2);
     p.wrapper.style.width = Math.max(a.width, vp.width) + "px";
     p.wrapper.style.height = vp.height + "px";
+    return {vp, a};
+}
+
+function sizeWrapper(p, layout = null) {
+    const {vp, a} = sizeWrapperBox(p, layout);
+    const offsetX = Math.max(0, (a.width - vp.width) / 2);
     p.canvas.style.width = vp.width + "px";
     p.canvas.style.height = vp.height + "px";
     // Center pages which fit, but start over-wide pages at x=0. Flex centering
@@ -175,6 +180,9 @@ function alignTextLayer(p, layout = null) {
 }
 
 function clearPage(p) {
+    // Already clear: skip the canvas writes, which would invalidate layout and
+    // make the next geometry read recompute the whole document.
+    if (!p.task && !p.rendering && !p.rendered && p.canvas.width === 0) return;
     if (p.task) {
         try {
             p.task.cancel();
@@ -253,6 +261,10 @@ function renderPageContent(p, layout = null) {
             p.canvas.height = off.height;
         }
         p.canvas.getContext("2d", {alpha: false}).drawImage(off, 0, 0);
+        // Free the offscreen backing store now that its bitmap has been copied,
+        // so each rendered page holds one full-resolution buffer rather than two.
+        off.width = 0;
+        off.height = 0;
         p.zoom = renderedZoom;
         // pdf.js TextLayer reads --scale-factor from its container; set it before
         // construction so each page's text layer uses its own zoom.
@@ -301,8 +313,15 @@ function relayoutAll() {
     applyContainerInsets(layout);
     for (const p of pages) {
         if (!p) continue;
-        sizeWrapper(p, layout);
-        alignTextLayer(p, layout);
+        if (p.rendered || p.rendering) {
+            sizeWrapper(p, layout);
+            alignTextLayer(p, layout);
+        } else {
+            // An unrendered page only needs its placeholder box for scrolling.
+            // Its canvas and text layer are sized when it is rendered, so
+            // skipping them keeps zooming cheap on long documents.
+            sizeWrapperBox(p, layout);
+        }
     }
     return layout;
 }
@@ -310,16 +329,19 @@ function relayoutAll() {
 // Re-render every currently-visible page (e.g. after zoom / rotation / resize).
 function rerenderVisible(layout = null) {
     const currentLayout = layout || readLayout();
+    // Measure every page before changing any of them. Interleaving a geometry
+    // read with the previous page's style writes forces a full document layout
+    // per page, which makes zooming scale with the page count.
+    const vh = window.innerHeight;
+    const nearPages = new Set();
+    for (const p of pages) {
+        if (!p || p.wrapper.style.display === "none") continue;
+        const rect = p.wrapper.getBoundingClientRect();
+        if (rect.bottom > -vh * 1.5 && rect.top < vh * 2.5) nearPages.add(p);
+    }
     for (const p of pages) {
         if (!p) continue;
-        if (p.wrapper.style.display === "none") {
-            clearPage(p);
-            continue;
-        }
-        const rect = p.wrapper.getBoundingClientRect();
-        const near = rect.bottom > -window.innerHeight * 1.5 &&
-                     rect.top < window.innerHeight * 2.5;
-        if (near) {
+        if (nearPages.has(p)) {
             // Force a re-render at the new layout but keep the previous frame
             // on screen: renderPageContent swaps in the new bitmap only after
             // the render completes, so zoom changes never blank the page.
@@ -560,6 +582,18 @@ globalThis.onRenderPage = function (renderReason = RENDER_RELAYOUT) {
         // zoomed (it looks far away) and render unrelated ones instead — the
         // viewer blanks exactly when a zoomed page re-renders.
         restoreZoomAnchor(anchor);
+
+        if (renderReason === RENDER_PINCH_UPDATE) {
+            // While the fingers are down, let the browser scale the existing
+            // bitmaps to the new size and re-render once on release. Rendering
+            // on every pinch event competes with the gesture for the main
+            // thread. Text layers are hidden until their page re-renders,
+            // since their glyph positions still describe the old zoom.
+            for (const p of pages) {
+                if (p) p.textLayer.hidden = true;
+            }
+            return;
+        }
 
         rerenderVisible(layout);
         return;

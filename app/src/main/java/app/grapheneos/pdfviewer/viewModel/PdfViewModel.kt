@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.FileNotFoundException
@@ -55,8 +56,19 @@ class PdfViewModel(
     val uri: StateFlow<Uri?> = savedStateHandle.getStateFlow(STATE_URI, null)
     fun setUri(value: Uri?) { savedStateHandle[STATE_URI] = value }
 
-    val page: StateFlow<Int> = savedStateHandle.getStateFlow(STATE_PAGE, 0)
-    fun setPage(value: Int) { savedStateHandle[STATE_PAGE] = value }
+    // The WebView reports the visible page from its JavaBridge thread while
+    // scrolling, and reads it back synchronously. SavedStateHandle is main-thread
+    // only, so keep the live value in a thread-safe flow and persist it from the
+    // main thread.
+    private val _page = MutableStateFlow(savedStateHandle[STATE_PAGE] ?: 0)
+    val page: StateFlow<Int> = _page.asStateFlow()
+    fun setPage(value: Int) { _page.value = value }
+
+    init {
+        viewModelScope.launch {
+            _page.collect { savedStateHandle[STATE_PAGE] = it }
+        }
+    }
 
     val documentOrientationDegrees: StateFlow<Int> =
         savedStateHandle.getStateFlow(STATE_DOCUMENT_ORIENTATION_DEGREES, 0)
@@ -97,7 +109,7 @@ class PdfViewModel(
     val pageIndicator: StateFlow<Int> = _pageIndicator.asStateFlow()
 
     fun showPageIndicator() {
-        _pageIndicator.value++
+        _pageIndicator.update { it + 1 }
     }
 
     enum class PasswordStatus {
