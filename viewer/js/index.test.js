@@ -6,6 +6,13 @@ vi.mock("pdfjs-dist", () => ({
     GlobalWorkerOptions: {},
     PasswordResponses: { NEED_PASSWORD: 1, INCORRECT_PASSWORD: 2 },
     TextLayer: class {
+        // One div per text item, as pdf.js does; empty items have no text node.
+        constructor({ textContentSource }) {
+            this.textDivs = (textContentSource.items || []).map((item) => ({
+                firstChild: item.str ? { data: item.str, length: item.str.length } : null,
+            }));
+        }
+
         render() {
             return Promise.resolve();
         }
@@ -145,6 +152,14 @@ class FakeElement {
     }
 }
 
+function pageItems(pageNumber) {
+    return [
+        { str: `Page ${pageNumber} alpha`, hasEOL: true },
+        { str: "", hasEOL: true },
+        { str: "beta gamma", hasEOL: false },
+    ];
+}
+
 function fakePage(pageNumber, state, { width = 100, height = 200 } = {}) {
     return {
         rotate: 0,
@@ -161,8 +176,12 @@ function fakePage(pageNumber, state, { width = 100, height = 200 } = {}) {
             return { promise: Promise.resolve(), cancel() {} };
         },
         streamTextContent() {
-            return {};
+            return { items: pageItems(pageNumber) };
         },
+        getTextContent() {
+            return Promise.resolve({ items: pageItems(pageNumber) });
+        },
+        cleanup() {},
     };
 }
 
@@ -185,6 +204,7 @@ async function setupViewer({
     pageCount = 3,
     getPage,
     darkDocument = false,
+    searchMatches = {},
 } = {}) {
     vi.resetModules();
     const state = {
@@ -196,6 +216,7 @@ async function setupViewer({
         zoom: 0.5,
         orientation: 0,
         renderCalls: [],
+        pageTexts: {},
         scrollCalls: [],
         scrolledPages: [],
         zoomReports: [],
@@ -224,6 +245,26 @@ async function setupViewer({
     };
     globalThis.addEventListener = addEventListener;
     globalThis.Element = FakeElement;
+    // CSS Custom Highlight API and Ranges, enough to see what gets painted.
+    globalThis.Highlight = class extends Set {
+        priority = 0;
+    };
+    globalThis.CSS = { highlights: new Map() };
+    globalThis.document.createRange = () => ({
+        setStart(node, offset) {
+            this.node = node;
+            this.start = offset;
+        },
+        setEnd(node, offset) {
+            this.end = offset;
+        },
+        toString() {
+            return this.node.data.slice(this.start, this.end);
+        },
+        getBoundingClientRect() {
+            return { top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0 };
+        },
+    });
     globalThis.window = globalThis;
     globalThis.innerWidth = 100;
     globalThis.innerHeight = 100;
@@ -246,6 +287,12 @@ async function setupViewer({
         getPageFitMode: () => state.fitMode,
         getContinuousMode: () => state.continuous,
         getDarkDocument: () => darkDocument,
+        getInsetIme: () => 0,
+        getSearchMatches: (page) => JSON.stringify(searchMatches[page] || []),
+        setPageText: (page, items) => {
+            state.pageTexts[page] = JSON.parse(items);
+            return true;
+        },
         getPage: () => state.currentPage,
         getInsetLeft: () => 0,
         getInsetRight: () => 0,
@@ -749,5 +796,82 @@ describe("text selection helper", () => {
         selection.isCollapsed = true;
         dispatch("selectionchange");
         expect(pagesElement.classList.contains("selecting")).toBe(false);
+    });
+});
+
+describe("find in document", () => {
+    const highlights = () => globalThis.CSS.highlights;
+    const painted = (name) => [...highlights().get(name)].map((range) => range.toString());
+
+    it("sends every page's text, starting from the current page", async () => {
+        const { state } = await setupViewer({ pageCount: 3 });
+
+        await globalThis.extractText(2, 7);
+
+        expect(Object.keys(state.pageTexts)).toEqual(["1", "2", "3"]);
+        // Line ends become spaces so words on adjacent lines stay apart.
+        expect(state.pageTexts[2]).toEqual(["Page 2 alpha ", " ", "beta gamma"]);
+    });
+
+    it("highlights matches on every rendered page and marks the active one", async () => {
+        await setupViewer({
+            pageCount: 2,
+            searchMatches: {
+                // "alpha" on page 1; "alpha" and "gamma" on page 2.
+                1: [[[0, 7, 5]]],
+                2: [[[0, 7, 5]], [[2, 5, 5]]],
+            },
+        });
+        await flushPromises();
+        // Draw both pages, as scrolling near them would.
+        globalThis.onRenderPage(0);
+        await flushPromises();
+
+        globalThis.updateSearch(true, 2, 1, false);
+
+        expect(painted("pdf-find")).toEqual(["alpha", "alpha", "gamma"]);
+        expect(painted("pdf-find-active")).toEqual(["gamma"]);
+    });
+
+    it("clears highlights when search closes", async () => {
+        await setupViewer({ pageCount: 1, searchMatches: { 1: [[[0, 7, 5]]] } });
+        await flushPromises();
+        globalThis.updateSearch(true, 1, 0, false);
+
+        globalThis.updateSearch(false, 0, -1, false);
+
+        expect(painted("pdf-find")).toEqual([]);
+        expect(painted("pdf-find-active")).toEqual([]);
+    });
+
+    it("repaints highlights when a page re-renders", async () => {
+        const { state } = await setupViewer({ pageCount: 1, searchMatches: { 1: [[[2, 0, 4]]] } });
+        await flushPromises();
+        globalThis.updateSearch(true, 1, 0, false);
+        state.fitMode = 0;
+        state.zoom = 1;
+
+        globalThis.onRenderPage(3);
+        await flushPromises();
+
+        // The old ranges go with the old text; the new text gets new ones.
+        expect(painted("pdf-find")).toEqual(["beta"]);
+        expect(painted("pdf-find-active")).toEqual(["beta"]);
+    });
+
+    it("ignores malformed match data", async () => {
+        await setupViewer({
+            pageCount: 1,
+            searchMatches: {
+                // Bad shapes, negative offsets, an empty item and an
+                // out-of-range item, then one valid piece.
+                1: [[null, [0, -1, 3], [1, 0, 1], [99, 0, 1], "x"], 5, [[0, 0, 4]]],
+            },
+        });
+        await flushPromises();
+
+        globalThis.updateSearch(true, 1, 2, false);
+
+        expect(painted("pdf-find")).toEqual(["Page"]);
     });
 });

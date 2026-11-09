@@ -6,6 +6,7 @@ import {
     getDocument,
 } from "pdfjs-dist";
 import { getSimplifiedOutline } from "./outline.js";
+import { pageTextItems } from "./search.js";
 
 GlobalWorkerOptions.workerSrc = "/viewer/js/worker.js";
 
@@ -206,6 +207,7 @@ function clearPage(p) {
         p.renderCanvas.width = 0;    // free the offscreen render target too
         p.renderCanvas.height = 0;
     }
+    clearPageHighlights(p);
     p.textLayer.replaceChildren();
 }
 
@@ -257,10 +259,12 @@ function renderPageContent(p, layout = null) {
     const ctx = off.getContext("2d", {alpha: false});
     ctx.scale(ratio, ratio);
 
+    clearPageHighlights(p);
     p.textLayer.replaceChildren();
 
     const renderTask = p.pdfPage.render({canvasContext: ctx, viewport: renderVp});
     p.task = renderTask;
+    let textLayer = null;
     renderTask.promise.then(() => {
         if (gen !== p.renderGen) return;
         if (p.canvas.width !== off.width || p.canvas.height !== off.height) {
@@ -276,7 +280,7 @@ function renderPageContent(p, layout = null) {
         // pdf.js TextLayer reads --scale-factor from its container; set it before
         // construction so each page's text layer uses its own zoom.
         p.textLayer.style.setProperty("--scale-factor", renderedZoom.toString());
-        const textLayer = new TextLayer({
+        textLayer = new TextLayer({
             textContentSource: p.pdfPage.streamTextContent(),
             container: p.textLayer,
             viewport: vp,
@@ -292,6 +296,10 @@ function renderPageContent(p, layout = null) {
         p.textLayer.append(p.endOfContent);
         alignTextLayer(p);
         p.textLayer.hidden = false;
+        // Index-aligned with the page's text items, which is what search
+        // offsets refer to.
+        p.textDivs = textLayer.textDivs;
+        paintPageHighlights(p);
     }).catch((err) => {
         if (gen !== p.renderGen) return;   // expected when cancelled by a newer render
         p.rendering = false;
@@ -685,6 +693,155 @@ globalThis.onRenderPage = function (renderReason = RENDER_RELAYOUT) {
     rerenderVisible(layout);
 };
 
+// Find in document. Matching happens on the Android side, so the query never
+// enters the WebView. This side sends each page's text there and turns the
+// match offsets it gets back into highlights. The CSS Custom Highlight API
+// paints from Ranges without changing the DOM, so highlights follow zoom,
+// rotation and pinch transforms on their own.
+const findHighlight = new Highlight();
+const activeHighlight = new Highlight();
+activeHighlight.priority = 1;
+CSS.highlights.set("pdf-find", findHighlight);
+CSS.highlights.set("pdf-find-active", activeHighlight);
+
+// { activePage, activeIndex } while the find bar is open, otherwise null.
+let search = null;
+// Set when the active match changed and should be scrolled to once painted.
+let scrollToActiveMatch = false;
+let extractEpoch = 0;
+// Extraction asked for before the document finished loading, replayed after.
+let pendingExtract = null;
+
+function clearPageHighlights(p) {
+    for (const range of p.findRanges || []) {
+        findHighlight.delete(range);
+        activeHighlight.delete(range);
+    }
+    p.findRanges = [];
+}
+
+function isOffset(value) {
+    return Number.isInteger(value) && value >= 0;
+}
+
+// Fetch this page's matches and paint them over its text layer.
+function paintPageHighlights(p) {
+    clearPageHighlights(p);
+    if (search === null || !p.rendered || !p.textDivs) return;
+    const pageNumber = Number(p.wrapper.dataset.page);
+    let groups;
+    try {
+        groups = JSON.parse(channel.getSearchMatches(pageNumber));
+    } catch {
+        return;
+    }
+    if (!Array.isArray(groups)) return;
+    let activeRange = null;
+    groups.forEach((group, match) => {
+        if (!Array.isArray(group)) return;
+        for (const piece of group) {
+            if (!Array.isArray(piece) || !piece.every(isOffset)) continue;
+            // Empty items get a div with no text node; skip them.
+            const node = p.textDivs[piece[0]]?.firstChild;
+            if (!node) continue;
+            const start = Math.min(piece[1], node.length);
+            const end = Math.min(piece[1] + piece[2], node.length);
+            // A match starting on a synthetic line-end separator is empty here.
+            if (start >= end) continue;
+            const range = document.createRange();
+            range.setStart(node, start);
+            range.setEnd(node, end);
+            findHighlight.add(range);
+            p.findRanges.push(range);
+            if (pageNumber === search.activePage && match === search.activeIndex) {
+                activeHighlight.add(range);
+                activeRange ??= range;
+            }
+        }
+    });
+    if (activeRange !== null && scrollToActiveMatch) {
+        scrollToActiveMatch = false;
+        scrollMatchIntoView(activeRange);
+    }
+}
+
+// Centre a match in the part of the screen not covered by bars or keyboard,
+// unless it is already fully visible there.
+function scrollMatchIntoView(range) {
+    const rect = range.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) return;
+    const dpr = globalThis.devicePixelRatio;
+    const top = channel.getInsetTop() / dpr;
+    const left = channel.getInsetLeft() / dpr;
+    const right = globalThis.innerWidth - channel.getInsetRight() / dpr;
+    // Edge to edge, the WebView is not resized for the keyboard.
+    const bottom = globalThis.innerHeight -
+        Math.max(channel.getInsetBottom(), channel.getInsetIme()) / dpr;
+    if (rect.top >= top && rect.bottom <= bottom && rect.left >= left && rect.right <= right) {
+        return;
+    }
+    globalThis.scrollBy({
+        left: (rect.left + rect.right) / 2 - (left + right) / 2,
+        top: (rect.top + rect.bottom) / 2 - (top + bottom) / 2,
+        behavior: "instant",
+    });
+}
+
+// Driven from the Android side whenever the search state changes. With
+// scroll, the active match is brought into view, rendering its page first if
+// needed; the scroll then happens when that page's highlights are painted.
+globalThis.updateSearch = function (open, activePage, activeIndex, scroll) {
+    search = open ? {activePage, activeIndex} : null;
+    scrollToActiveMatch = open && scroll && activePage > 0;
+    for (const p of pages) {
+        if (p) paintPageHighlights(p);
+    }
+    if (scrollToActiveMatch) {
+        clearPinchTransform();
+        globalThis.scrollToPage(activePage);
+        // scrollToPage moves the page into view, which may already have
+        // rendered it; paint again in case it was rendered and in view.
+        const p = pages[activePage - 1];
+        if (p && p.rendered) paintPageHighlights(p);
+    }
+};
+
+// Sends every page's text to the Android side, starting at the page being
+// viewed so the first results come quickly. Runs once per document.
+globalThis.extractText = async function (startPage, generation) {
+    if (pdfDoc === null) {
+        pendingExtract = {startPage, generation};
+        return;
+    }
+    const epoch = ++extractEpoch;
+    const doc = pdfDoc;
+    const total = doc.numPages;
+    for (let i = 0; i < total; i++) {
+        const pageNumber = ((startPage - 1 + i) % total) + 1;
+        // Rendering goes first: the pdf.js worker is single threaded. Bounded
+        // so a stuck flag cannot stall extraction.
+        for (let wait = 0; wait < 64 && pages.some((p) => p && p.rendering); wait++) {
+            await new Promise((resolve) => setTimeout(resolve, 16));
+        }
+        if (epoch !== extractEpoch || doc !== pdfDoc) return;
+        let items = [];
+        try {
+            const page = await doc.getPage(pageNumber);
+            ({items} = await page.getTextContent());
+            const entry = pages[pageNumber - 1];
+            // Free parsed resources of pages that are not on screen.
+            if (!entry || (!entry.rendered && !entry.rendering)) page.cleanup();
+        } catch (error) {
+            console.log("getTextContent error: " + error);
+        }
+        if (epoch !== extractEpoch || doc !== pdfDoc) return;
+        // False means the index is full or this document is no longer current.
+        if (!channel.setPageText(pageNumber, JSON.stringify(pageTextItems(items)), generation)) {
+            return;
+        }
+    }
+};
+
 // Selection helper, following pdf.js's TextLayerBuilder for current Chromium.
 // Each text layer ends with an "end of content" element. While a selection is
 // being made, CSS stretches that element underneath the whole layer. A drag
@@ -775,6 +932,7 @@ globalThis.setContinuousMode = function () {
 };
 
 globalThis.loadDocument = function () {
+    extractEpoch++;
     clearPinchTransform();
     const pdfPassword = channel.getPassword();
     const loadingTask = getDocument({
@@ -811,6 +969,12 @@ globalThis.loadDocument = function () {
         channel.onLoaded();
         pdfDoc = newDoc;
         channel.setNumPages(pdfDoc.numPages);
+        if (pendingExtract !== null) {
+            const resume = pendingExtract;
+            pendingExtract = null;
+            // A stale generation is refused by the first setPageText.
+            globalThis.extractText(resume.startPage, resume.generation);
+        }
         pdfDoc.getMetadata().then(function (data) {
             channel.setDocumentProperties(JSON.stringify(data.info));
         }).catch(function (error) {

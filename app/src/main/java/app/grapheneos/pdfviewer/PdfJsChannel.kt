@@ -68,6 +68,9 @@ class PdfJsChannel(private val viewModel: PdfViewModel) {
     fun getInsetBottom(): Float = viewModel.insetBottom
 
     @JavascriptInterface
+    fun getInsetIme(): Float = viewModel.insetIme
+
+    @JavascriptInterface
     fun getDocumentOrientationDegrees(): Int = viewModel.documentOrientationDegrees.value
 
     @JavascriptInterface
@@ -116,4 +119,21 @@ class PdfJsChannel(private val viewModel: PdfViewModel) {
 
     @JavascriptInterface
     fun getPassword(): String = viewModel.encryptedDocumentPassword
+
+    /**
+     * One page of extracted text, as a JSON array of per-item strings. Called on a WebView
+     * binder thread. Returns false once the index is full, which stops the extraction loop.
+     */
+    @JavascriptInterface
+    fun setPageText(page: Int, itemsJson: String, generation: Int): Boolean =
+        viewModel.setPageText(page, itemsJson, generation)
+
+    /**
+     * Match positions on one page, for highlighting, as nested arrays of
+     * [itemIndex, offsetInItem, length]. With continuous scrolling several pages are
+     * on screen, so each page asks for its own when its text layer is drawn. Only
+     * numbers cross: the query itself never reaches the WebView.
+     */
+    @JavascriptInterface
+    fun getSearchMatches(page: Int): String = viewModel.searchMatchesFor(page)
 }
