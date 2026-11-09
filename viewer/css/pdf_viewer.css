@@ -27,6 +27,9 @@ body {
 
 #pages {
     display: block;
+    /* Pinch zoom scales the page stack around a focus given in its own
+       coordinates. */
+    transform-origin: 0 0;
 }
 
 /*
