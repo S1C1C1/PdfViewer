@@ -287,6 +287,9 @@ function renderPageContent(p, layout = null) {
         if (gen !== p.renderGen) return;
         p.rendered = true;
         p.rendering = false;
+        // TextLayer replaced the layer's children, so add the selection
+        // helper back after the text.
+        p.textLayer.append(p.endOfContent);
         alignTextLayer(p);
         p.textLayer.hidden = false;
     }).catch((err) => {
@@ -682,6 +685,35 @@ globalThis.onRenderPage = function (renderReason = RENDER_RELAYOUT) {
     rerenderVisible(layout);
 };
 
+// Selection helper, following pdf.js's TextLayerBuilder for current Chromium.
+// Each text layer ends with an "end of content" element. While a selection is
+// being made, CSS stretches that element underneath the whole layer. A drag
+// over blank space then lands on it rather than on the layer itself, which
+// Chromium would otherwise map to a distant text position, making the
+// selection jump several lines ahead.
+//
+// pdf.js turns this on per page. With continuous scrolling a drag can cross
+// into the next page's blank margin before the selection reaches that page,
+// so it is turned on for all pages at once, on the page container.
+function setSelecting(selecting) {
+    pagesEl.classList.toggle("selecting", selecting);
+}
+
+document.addEventListener("pointerdown", (event) => {
+    if (event.target instanceof Element && event.target.closest(".textLayer")) {
+        setSelecting(true);
+    }
+});
+document.addEventListener("pointerup", () => setSelecting(false));
+globalThis.addEventListener("blur", () => setSelecting(false));
+
+// Selection handles are dragged natively on Android without pointer events,
+// so follow the selection itself as well.
+document.addEventListener("selectionchange", () => {
+    const selection = document.getSelection();
+    setSelecting(selection.rangeCount > 0 && !selection.isCollapsed);
+});
+
 globalThis.isTextSelected = function () {
     return globalThis.getSelection().toString() !== "";
 };
@@ -833,11 +865,14 @@ function createPageEntry(pdfPage, pageNumber) {
     textLayer.className = "textLayer";
     textLayer.hidden = true;
 
+    const endOfContent = document.createElement("div");
+    endOfContent.className = "endOfContent";
+
     wrapper.appendChild(canvas);
     wrapper.appendChild(textLayer);
 
     return {
-        wrapper, canvas, textLayer, pdfPage,
+        wrapper, canvas, textLayer, endOfContent, pdfPage,
         viewport: null, rendered: false, rendering: false, task: null,
     };
 }

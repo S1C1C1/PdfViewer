@@ -116,7 +116,9 @@
     user-select: none;
 }
 
-.textLayer.selecting .endOfContent {
+/* While selecting (state set on #pages), stretch the helper under each layer
+   so drags over blank space land on it rather than on the layer itself. */
+.selecting .textLayer .endOfContent {
     top: 0;
 }
 
