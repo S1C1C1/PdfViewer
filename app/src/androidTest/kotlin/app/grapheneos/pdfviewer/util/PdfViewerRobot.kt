@@ -153,7 +153,7 @@ class PdfViewerRobot(private val composeRule: ComposeTestRule) {
             composeRule.onNodeWithContentDescription(title).assertIsDisplayed()
             composeRule.onNodeWithContentDescription(title).performClick()
         } catch (_: AssertionError) {
-            composeRule.onNodeWithContentDescription(TestTags.OVERFLOW_MENU).performClick()
+            composeRule.onNodeWithTag(TestTags.OVERFLOW_MENU).performClick()
             composeRule.waitForIdle()
             composeRule.onNodeWithText(title).performScrollTo().performClick()
         }
@@ -187,11 +187,11 @@ class PdfViewerRobot(private val composeRule: ComposeTestRule) {
             val node = composeRule.onNodeWithContentDescription(title)
             if (expected) node.assertIsEnabled() else node.assertIsNotEnabled()
         } catch (_: AssertionError) {
-            composeRule.onNodeWithContentDescription(TestTags.OVERFLOW_MENU).performClick()
+            composeRule.onNodeWithTag(TestTags.OVERFLOW_MENU).performClick()
             composeRule.waitForIdle()
             val node = composeRule.onNodeWithText(title).performScrollTo()
             if (expected) node.assertIsEnabled() else node.assertIsNotEnabled()
-            composeRule.onNodeWithContentDescription(TestTags.OVERFLOW_MENU).performClick()
+            composeRule.onNodeWithTag(TestTags.OVERFLOW_MENU).performClick()
         }
     }
 
@@ -204,18 +204,18 @@ class PdfViewerRobot(private val composeRule: ComposeTestRule) {
             try {
                 composeRule.onNodeWithContentDescription(title).assertIsDisplayed()
             } catch (_: AssertionError) {
-                composeRule.onNodeWithContentDescription(TestTags.OVERFLOW_MENU).performClick()
+                composeRule.onNodeWithTag(TestTags.OVERFLOW_MENU).performClick()
                 composeRule.waitForIdle()
                 composeRule.onNodeWithText(title).performScrollTo().assertIsDisplayed()
-                composeRule.onNodeWithContentDescription(TestTags.OVERFLOW_MENU).performClick()
+                composeRule.onNodeWithTag(TestTags.OVERFLOW_MENU).performClick()
             }
         } else {
             composeRule.onNodeWithContentDescription(title).assertDoesNotExist()
             try {
-                composeRule.onNodeWithContentDescription(TestTags.OVERFLOW_MENU).performClick()
+                composeRule.onNodeWithTag(TestTags.OVERFLOW_MENU).performClick()
                 composeRule.waitForIdle()
                 composeRule.onNodeWithText(title).assertDoesNotExist()
-                composeRule.onNodeWithContentDescription(TestTags.OVERFLOW_MENU).performClick()
+                composeRule.onNodeWithTag(TestTags.OVERFLOW_MENU).performClick()
             } catch (_: AssertionError) {}
         }
     }
@@ -619,7 +619,7 @@ class PdfViewerRobot(private val composeRule: ComposeTestRule) {
         val nodes = composeRule.onAllNodesWithContentDescription(zoomInDesc)
             .fetchSemanticsNodes()
         if (nodes.isEmpty()) {
-            composeRule.onNodeWithContentDescription(TestTags.OVERFLOW_MENU).performClick()
+            composeRule.onNodeWithTag(TestTags.OVERFLOW_MENU).performClick()
             composeRule.waitForIdle()
         }
     }

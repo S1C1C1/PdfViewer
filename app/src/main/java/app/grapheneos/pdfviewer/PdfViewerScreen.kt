@@ -93,8 +93,15 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.toggleableState
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.buildAnnotatedString
@@ -940,10 +947,13 @@ private fun PdfTopAppBar(
             }
 
             if (documentLoaded) {
-                IconButton(onClick = { onMenuToggle(true) }) {
+                IconButton(
+                    onClick = { onMenuToggle(true) },
+                    modifier = Modifier.testTag(TestTags.OVERFLOW_MENU)
+                ) {
                     Icon(
                         Icons.Default.MoreVert,
-                        contentDescription = TestTags.OVERFLOW_MENU
+                        contentDescription = stringResource(R.string.action_more_options)
                     )
                 }
                 DropdownMenu(
@@ -988,6 +998,10 @@ private fun PdfTopAppBar(
                             text = { Text(stringResource(R.string.action_fit_free)) },
                             onClick = { onMenuToggle(false); onFitFree() },
                             enabled = enabled,
+                            modifier = Modifier.semantics {
+                                role = Role.RadioButton
+                                selected = pageFitMode == FIT_MODE_FREE
+                            },
                             leadingIcon = {
                                 if (pageFitMode == FIT_MODE_FREE) {
                                     Icon(Icons.Default.Check, contentDescription = null)
@@ -998,6 +1012,10 @@ private fun PdfTopAppBar(
                             text = { Text(stringResource(R.string.action_fit_page)) },
                             onClick = { onMenuToggle(false); onFitPage() },
                             enabled = enabled,
+                            modifier = Modifier.semantics {
+                                role = Role.RadioButton
+                                selected = pageFitMode == FIT_MODE_PAGE
+                            },
                             leadingIcon = {
                                 if (pageFitMode == FIT_MODE_PAGE) {
                                     Icon(Icons.Default.Check, contentDescription = null)
@@ -1008,6 +1026,10 @@ private fun PdfTopAppBar(
                             text = { Text(stringResource(R.string.action_fit_width)) },
                             onClick = { onMenuToggle(false); onFitWidth() },
                             enabled = enabled,
+                            modifier = Modifier.semantics {
+                                role = Role.RadioButton
+                                selected = pageFitMode == FIT_MODE_WIDTH
+                            },
                             leadingIcon = {
                                 if (pageFitMode == FIT_MODE_WIDTH) {
                                     Icon(Icons.Default.Check, contentDescription = null)
@@ -1018,6 +1040,10 @@ private fun PdfTopAppBar(
                             text = { Text(stringResource(R.string.action_continuous_scroll)) },
                             onClick = { onMenuToggle(false); onContinuousModeChange() },
                             enabled = enabled,
+                            modifier = Modifier.semantics {
+                                role = Role.Checkbox
+                                toggleableState = ToggleableState(continuousMode)
+                            },
                             leadingIcon = {
                                 if (continuousMode) {
                                     Icon(Icons.Default.Check, contentDescription = null)
@@ -1029,6 +1055,10 @@ private fun PdfTopAppBar(
                         text = { Text(stringResource(R.string.action_dark_document)) },
                         onClick = { onMenuToggle(false); onDarkDocumentChange() },
                         enabled = enabled,
+                        modifier = Modifier.semantics {
+                            role = Role.Checkbox
+                            toggleableState = ToggleableState(darkDocument)
+                        },
                         leadingIcon = {
                             if (darkDocument) {
                                 Icon(Icons.Default.Check, contentDescription = null)
@@ -1358,7 +1388,7 @@ private fun JumpToPageDialog(
         title = { Text(stringResource(R.string.action_jump_to_page)) },
         text = {
             Column {
-                Text("Page (1-$numPages)")
+                Text(stringResource(R.string.jump_to_page_range, numPages))
                 OutlinedTextField(
                     value = textFieldValue,
                     onValueChange = { newValue ->
@@ -1396,8 +1426,11 @@ private fun JumpToPageDialog(
 
 @Composable
 private fun PageIndicator(page: Int, numPages: Int) {
+    val description = stringResource(R.string.page_indicator_description, page, numPages)
     Box(
         modifier = Modifier
+            // Read "Page 3 of 10" rather than "3 slash 10".
+            .clearAndSetSemantics { contentDescription = description }
             .background(
                 color = Color.Black.copy(alpha = 0.55f),
                 shape = RoundedCornerShape(16.dp)
@@ -1522,7 +1555,9 @@ private fun PasswordPromptDialog(
                             } else {
                                 Icons.Filled.Visibility
                             },
-                            contentDescription = null
+                            contentDescription = stringResource(
+                                if (passwordVisible) R.string.hide_password else R.string.show_password
+                            )
                         )
                     }
                 },
