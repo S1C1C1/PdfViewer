@@ -48,6 +48,13 @@ let pageBuildGeneration = 0;
 let pageBuildComplete = false;
 let pendingScrollPage = 0;
 
+// Visual-only zoom while a pinch is in progress: the whole page stack is scaled
+// with a compositor transform, and the real layout and render happen once on
+// release. Null when no pinch is active.
+//   { base, scale, tx, ty }: base is the zoom the pages are laid out at, scale
+//   the visual factor on top of it, tx/ty the translation in CSS px.
+let pinch = null;
+
 const container = document.getElementById("container");
 const pagesEl = document.getElementById("pages");
 
@@ -293,6 +300,9 @@ function renderPageContent(p, layout = null) {
 function setupObserver() {
     if (renderObserver) renderObserver.disconnect();
     renderObserver = new IntersectionObserver((entries) => {
+        // Pages revealed or hidden by a pinch are handled on release, at the
+        // final zoom, instead of being rendered at the old one.
+        if (pinch) return;
         for (const entry of entries) {
             const p = pages[Number(entry.target.dataset.page) - 1];
             if (!p) continue;
@@ -407,13 +417,15 @@ function captureZoomAnchor(p, viewportX, viewportY) {
     if (!p) return null;
     const rect = p.canvas.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return null;
-    return {
-        page: p,
-        viewportX,
-        viewportY,
-        x: captureAxisAnchor(viewportX, rect.left, rect.width),
-        y: captureAxisAnchor(viewportY, rect.top, rect.height),
-    };
+    const x = captureAxisAnchor(viewportX, rect.left, rect.width);
+    const y = captureAxisAnchor(viewportY, rect.top, rect.height);
+    // A focus outside the page sits in a fixed-size gap. A pinch transform
+    // magnifies that gap on screen, so store the distance as laid out.
+    if (pinch) {
+        x.offset /= pinch.scale;
+        y.offset /= pinch.scale;
+    }
+    return {page: p, viewportX, viewportY, x, y};
 }
 
 function restoreZoomAnchor(anchor) {
@@ -466,6 +478,8 @@ globalThis.currentPageTextLayer = function () {
 // Report the most-visible page back to the ViewModel (drives the page indicator
 // and next/previous enablement).
 function updateCurrentPage() {
+    // Mid-pinch geometry is only visual, and the Android side owns the zoom.
+    if (pinch) return;
     const best = mostVisiblePage();
     if (!best) return;
     const num = Number(best.wrapper.dataset.page);
@@ -545,12 +559,54 @@ globalThis.scrollToPage = function (pageNumber) {
     }
 };
 
+// Scale the laid-out pages around the pinch focus without touching layout.
+// Each event only writes one transform, so its cost does not depend on the
+// page count, and the text layer stays aligned because it is scaled too.
+function applyPinchTransform() {
+    const dpr = globalThis.devicePixelRatio;
+    const zoom = channel.getZoomRatio();
+    const focusX = channel.getZoomFocusX() / dpr;
+    const focusY = channel.getZoomFocusY() / dpr;
+    if (!pinch) {
+        // The Android side derives each pinch zoom from the ratio it last
+        // published, which is the most visible page's laid-out zoom.
+        const best = mostVisiblePage();
+        const base = best && best.viewport ? best.viewport.scale : 0;
+        if (!(base > 0) || !(zoom > 0)) return;
+        pinch = {base, scale: 1, tx: 0, ty: 0};
+        pagesEl.style.willChange = "transform";
+    }
+    const scale = zoom / pinch.base;
+    const k = scale / pinch.scale;
+    // With transform-origin 0 0, the transformed box starts at the untransformed
+    // origin plus the current translation.
+    const rect = pagesEl.getBoundingClientRect();
+    const originX = rect.left - pinch.tx;
+    const originY = rect.top - pinch.ty;
+    // Scale the current picture by k around the focus point.
+    pinch.tx = k * pinch.tx + (1 - k) * (focusX - originX);
+    pinch.ty = k * pinch.ty + (1 - k) * (focusY - originY);
+    pinch.scale = scale;
+    pagesEl.style.transform = `translate(${pinch.tx}px, ${pinch.ty}px) scale(${scale})`;
+}
+
+function clearPinchTransform() {
+    if (!pinch) return;
+    pinch = null;
+    pagesEl.style.transform = "";
+    pagesEl.style.willChange = "";
+}
+
 // Driven from the Android side.
 globalThis.onRenderPage = function (renderReason = RENDER_RELAYOUT) {
     orientationDegrees = channel.getDocumentOrientationDegrees();
 
-    if (renderReason === RENDER_PINCH_END || renderReason === RENDER_PINCH_UPDATE ||
-        renderReason === RENDER_MENU_ZOOM) {
+    if (renderReason === RENDER_PINCH_UPDATE) {
+        applyPinchTransform();
+        return;
+    }
+
+    if (renderReason === RENDER_PINCH_END || renderReason === RENDER_MENU_ZOOM) {
         // Adopt the new free-zoom ratio and re-render visible pages while
         // preserving the relevant focus point.
         const dpr = globalThis.devicePixelRatio;
@@ -566,6 +622,9 @@ globalThis.onRenderPage = function (renderReason = RENDER_RELAYOUT) {
         // and preceding pages whose fit ratios differ from this page's ratio.
         const anchorPage = pageNearestViewportY(viewportFocusY);
         const anchor = captureZoomAnchor(anchorPage, viewportFocusX, viewportFocusY);
+        // The anchor was measured on the pinch picture as the user saw it.
+        // Drop the transform now that the real layout takes over.
+        clearPinchTransform();
 
         const newZoom = channel.getZoomRatio();
         zoomRatio = newZoom;
@@ -583,23 +642,12 @@ globalThis.onRenderPage = function (renderReason = RENDER_RELAYOUT) {
         // viewer blanks exactly when a zoomed page re-renders.
         restoreZoomAnchor(anchor);
 
-        if (renderReason === RENDER_PINCH_UPDATE) {
-            // While the fingers are down, let the browser scale the existing
-            // bitmaps to the new size and re-render once on release. Rendering
-            // on every pinch event competes with the gesture for the main
-            // thread. Text layers are hidden until their page re-renders,
-            // since their glyph positions still describe the old zoom.
-            for (const p of pages) {
-                if (p) p.textLayer.hidden = true;
-            }
-            return;
-        }
-
         rerenderVisible(layout);
         return;
     }
 
     // RENDER_RELAYOUT handles fit-mode, orientation, and page changes.
+    clearPinchTransform();
     if (fitMode() !== FitMode.FREE) {
         // An active fit mode owns the zoom. Clear the cached free-zoom ratio
         // so returning to free zoom derives a fresh ratio.
@@ -684,6 +732,7 @@ globalThis.getPageFitMode = function () {
 };
 
 globalThis.setContinuousMode = function () {
+    clearPinchTransform();
     // The ViewModel was already updated by the Java caller; reflect it in the DOM.
     const target = channel.getPage();
     applyContinuousMode();
@@ -694,6 +743,7 @@ globalThis.setContinuousMode = function () {
 };
 
 globalThis.loadDocument = function () {
+    clearPinchTransform();
     const pdfPassword = channel.getPassword();
     const loadingTask = getDocument({
         url: "https://localhost/placeholder.pdf",
@@ -866,6 +916,7 @@ globalThis.onscroll = function () {
 };
 
 globalThis.onresize = function () {
+    clearPinchTransform();
     relayoutAll();
     rerenderVisible();
 };

@@ -102,10 +102,23 @@ class FakeElement {
         if (this.style.display === "none") {
             return { top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0 };
         }
-        const height = px(this.style.height);
-        const width = px(this.style.width);
-        const top = this.documentTop() - globalThis.scrollY;
-        const left = this.documentLeft() - globalThis.scrollX;
+        let height = px(this.style.height);
+        let width = px(this.style.width);
+        let top = this.documentTop() - globalThis.scrollY;
+        let left = this.documentLeft() - globalThis.scrollX;
+        // Apply this element's and its ancestors' transforms, innermost first.
+        for (let e = this; e; e = e.parentElement) {
+            const match = /translate\((-?[\d.e+-]+)px, (-?[\d.e+-]+)px\) scale\(([\d.e+-]+)\)/
+                .exec(e.style.transform || "");
+            if (!match) continue;
+            const [tx, ty, scale] = match.slice(1).map(Number);
+            const originLeft = e.documentLeft() - globalThis.scrollX;
+            const originTop = e.documentTop() - globalThis.scrollY;
+            left = originLeft + tx + scale * (left - originLeft);
+            top = originTop + ty + scale * (top - originTop);
+            width *= scale;
+            height *= scale;
+        }
         return { top, bottom: top + height, left, right: left + width, height, width };
     }
 
@@ -122,6 +135,7 @@ function fakePage(pageNumber, state, { width = 100, height = 200 } = {}) {
         getViewport({ scale, rotation }) {
             const sideways = Math.abs(rotation % 180) === 90;
             return {
+                scale,
                 width: (sideways ? height : width) * scale,
                 height: (sideways ? width : height) * scale,
             };
@@ -337,7 +351,13 @@ describe("continuous page layout", () => {
 
         globalThis.onRenderPage(2);
 
-        const after = canvas.getBoundingClientRect();
+        let after = canvas.getBoundingClientRect();
+        expect(after.left + after.width * normalizedX).toBeCloseTo(state.focusX);
+        expect(after.top + after.height * normalizedY).toBeCloseTo(state.focusY);
+
+        globalThis.onRenderPage(1);
+
+        after = canvas.getBoundingClientRect();
         expect(after.left + after.width * normalizedX).toBeCloseTo(state.focusX);
         expect(after.top + after.height * normalizedY).toBeCloseTo(state.focusY);
     });
@@ -364,6 +384,7 @@ describe("continuous page layout", () => {
         state.zoom = 2;
 
         globalThis.onRenderPage(2);
+        globalThis.onRenderPage(1);
 
         const firstAfter = firstCanvas.getBoundingClientRect();
         const secondAfter = secondCanvas.getBoundingClientRect();
@@ -381,6 +402,7 @@ describe("continuous page layout", () => {
         state.zoom = 2;
 
         globalThis.onRenderPage(2);
+        globalThis.onRenderPage(1);
 
         const wrapper = pagesElement.children[3];
         const [canvas, textLayer] = wrapper.children;
@@ -396,6 +418,9 @@ describe("continuous page layout", () => {
         state.zoom = 1;
 
         globalThis.onRenderPage(2);
+        // Layout waits for the release; the pinch itself is only visual.
+        expect(pagesElement.children[4].style.height).not.toBe("200px");
+        globalThis.onRenderPage(1);
 
         expect(pagesElement.children[4].style.height).toBe("200px");
     });
@@ -420,12 +445,13 @@ describe("continuous page layout", () => {
         expect(state.renderCalls.length).toBeGreaterThanOrEqual(2);
     });
 
-    it("scales existing bitmaps during a pinch and re-renders on release", async () => {
-        const { state, pagesElement } = await setupViewer({ pageCount: 2 });
+    it("pinches with a transform only and lays out once on release", async () => {
+        const { state, pagesElement } = await setupViewer({ pageCount: 3 });
         await flushPromises();
         const rendersBefore = state.renderCalls.length;
         const [canvas, textLayer] = pagesElement.children[0].children;
-        const bitmapWidth = canvas.width;
+        const cssWidth = canvas.style.width;
+        const placeholderHeight = pagesElement.children[2].style.height;
         state.fitMode = 0;
 
         state.zoom = 0.75;
@@ -434,18 +460,34 @@ describe("continuous page layout", () => {
         globalThis.onRenderPage(2);
         await flushPromises();
 
-        // No renders while the fingers are down: the old bitmap is stretched
-        // to the new size, and the stale text layer is hidden.
+        // While the fingers are down nothing is re-laid out or re-rendered:
+        // the stack is scaled by 1 / 0.5 and the text layer moves with it.
+        expect(pagesElement.style.transform).toMatch(/scale\(2\)$/);
+        expect(canvas.style.width).toBe(cssWidth);
+        expect(pagesElement.children[2].style.height).toBe(placeholderHeight);
         expect(state.renderCalls.length).toBe(rendersBefore);
-        expect(canvas.width).toBe(bitmapWidth);
-        expect(canvas.style.width).toBe("100px");
-        expect(textLayer.hidden).toBe(true);
+        expect(textLayer.hidden).toBe(false);
 
         globalThis.onRenderPage(1);
         await flushPromises();
 
+        expect(pagesElement.style.transform).toBe("");
+        expect(canvas.style.width).toBe("100px");
         expect(state.renderCalls.length).toBeGreaterThan(rendersBefore);
         expect(textLayer.hidden).toBe(false);
+    });
+
+    it("drops a pinch transform when another layout change arrives", async () => {
+        const { state, pagesElement } = await setupViewer({ pageCount: 2 });
+        state.fitMode = 0;
+        state.zoom = 1;
+        globalThis.onRenderPage(2);
+        expect(pagesElement.style.transform).not.toBe("");
+
+        state.fitMode = 2;
+        globalThis.onRenderPage(0);
+
+        expect(pagesElement.style.transform).toBe("");
     });
 
     it("frees the offscreen render buffer after each render", async () => {
