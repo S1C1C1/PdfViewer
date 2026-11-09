@@ -80,7 +80,8 @@ class PdfViewerRobot(private val composeRule: ComposeTestRule) {
         FitFree(R.string.action_fit_free),
         FitPage(R.string.action_fit_page),
         FitWidth(R.string.action_fit_width),
-        ContinuousScroll(R.string.action_continuous_scroll)
+        ContinuousScroll(R.string.action_continuous_scroll),
+        DarkDocument(R.string.action_dark_document)
     }
 
     enum class SnackbarMessage(@StringRes internal val stringRes: Int) {
@@ -248,6 +249,8 @@ class PdfViewerRobot(private val composeRule: ComposeTestRule) {
     fun clickFitPage() = click(AppMenuItem.FitPage)
     fun clickFitWidth() = click(AppMenuItem.FitWidth)
     fun clickContinuousScroll() = click(AppMenuItem.ContinuousScroll)
+
+    fun clickDarkDocument() = click(AppMenuItem.DarkDocument)
 
     // JumpToPage
 

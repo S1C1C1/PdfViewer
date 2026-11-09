@@ -77,6 +77,9 @@ class PdfJsChannel(private val viewModel: PdfViewModel) {
     fun getContinuousMode(): Boolean = viewModel.continuousMode.value
 
     @JavascriptInterface
+    fun getDarkDocument(): Boolean = viewModel.darkDocument.value
+
+    @JavascriptInterface
     fun setNumPages(numPages: Int) {
         viewModel.setNumPages(numPages)
     }

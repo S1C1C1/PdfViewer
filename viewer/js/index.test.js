@@ -46,6 +46,15 @@ class FakeElement {
         this.hidden = false;
         this.width = 0;
         this.height = 0;
+        const classes = new Set();
+        this.classList = {
+            toggle: (name, force) => {
+                const add = force === undefined ? !classes.has(name) : force;
+                if (add) classes.add(name); else classes.delete(name);
+                return add;
+            },
+            contains: (name) => classes.has(name),
+        };
     }
 
     appendChild(child) {
@@ -145,6 +154,7 @@ async function setupViewer({
     pageGap = 0,
     pageCount = 3,
     getPage,
+    darkDocument = false,
 } = {}) {
     vi.resetModules();
     const state = {
@@ -196,6 +206,7 @@ async function setupViewer({
         getMinZoomRatio: () => 0.1,
         getPageFitMode: () => state.fitMode,
         getContinuousMode: () => state.continuous,
+        getDarkDocument: () => darkDocument,
         getPage: () => state.currentPage,
         getInsetLeft: () => 0,
         getInsetRight: () => 0,
@@ -234,7 +245,7 @@ async function setupViewer({
     await import("./index.js");
     globalThis.loadDocument();
     await flushPromises();
-    return { state, pagesElement: pages, pdfDocument };
+    return { state, pagesElement: pages, pdfDocument, body };
 }
 
 afterEach(() => {
@@ -573,5 +584,41 @@ describe("continuous page layout", () => {
 
         expect(globalThis.scrollY).toBeGreaterThan(0);
         expect(state.currentPage).toBe(3);
+    });
+});
+
+describe("dark document", () => {
+    it("applies the saved preference on startup", async () => {
+        const { body } = await setupViewer({ darkDocument: true });
+
+        expect(body.classList.contains("dark-document")).toBe(true);
+    });
+
+    it("starts in normal colours by default", async () => {
+        const { body } = await setupViewer();
+
+        expect(body.classList.contains("dark-document")).toBe(false);
+    });
+
+    it("toggles without re-rendering pages", async () => {
+        const { state, body } = await setupViewer();
+        await flushPromises();
+        const renders = state.renderCalls.length;
+
+        globalThis.setDarkDocument(true);
+        expect(body.classList.contains("dark-document")).toBe(true);
+        globalThis.setDarkDocument(false);
+        expect(body.classList.contains("dark-document")).toBe(false);
+        await flushPromises();
+
+        expect(state.renderCalls.length).toBe(renders);
+    });
+
+    it("only accepts a real boolean", async () => {
+        const { body } = await setupViewer();
+
+        globalThis.setDarkDocument("true");
+
+        expect(body.classList.contains("dark-document")).toBe(false);
     });
 });

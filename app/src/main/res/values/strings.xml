@@ -12,6 +12,7 @@
     <string name="action_fit_page">Fit page</string>
     <string name="action_fit_width">Fit width</string>
     <string name="action_continuous_scroll">Continuous scrolling</string>
+    <string name="action_dark_document">Dark document</string>
     <string name="action_rotate_clockwise">Rotate clockwise</string>
     <string name="action_rotate_counterclockwise">Rotate counterclockwise</string>
     <string name="action_share">Share</string>

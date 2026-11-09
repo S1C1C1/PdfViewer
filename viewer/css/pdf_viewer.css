@@ -65,3 +65,18 @@ body {
 [data-main-rotation="270"] {
     transform: rotate(270deg);
 }
+
+/*
+ * Dark document: invert lightness and rotate hues back, so white pages turn
+ * near-black while coloured content keeps roughly its hue. Inverting by 90%
+ * rather than 100% avoids pure white-on-black glare. Photos appear as
+ * negatives. The page shadow would invert into a light glow, so it is dropped.
+ */
+body.dark-document {
+    background-color: #3c3c3c;
+}
+
+body.dark-document .page-wrapper canvas {
+    filter: invert(0.9) hue-rotate(180deg);
+    box-shadow: none;
+}

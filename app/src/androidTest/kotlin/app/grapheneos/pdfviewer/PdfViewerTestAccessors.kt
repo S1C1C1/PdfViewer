@@ -62,3 +62,6 @@ var PdfViewer.zoomRatio: Float
     set(value) {
         viewModel.setZoomRatio(value)
     }
+
+val PdfViewer.darkDocument: Boolean
+    get() = viewModel.darkDocument.value

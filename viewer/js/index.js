@@ -666,6 +666,19 @@ globalThis.toggleTextLayerVisibility = function () {
     isTextLayerVisible = !isTextLayerVisible;
 };
 
+function applyDarkDocument(enabled) {
+    document.body.classList.toggle("dark-document", enabled === true);
+}
+
+// Driven from the Android side when the menu option is toggled.
+globalThis.setDarkDocument = function (enabled) {
+    applyDarkDocument(enabled);
+};
+
+// Apply the saved preference before any page is drawn, so the first frame
+// already has the right colours.
+applyDarkDocument(channel.getDarkDocument());
+
 globalThis.getPageFitMode = function () {
     return channel.getPageFitMode();
 };
