@@ -2,9 +2,11 @@ package app.grapheneos.pdfviewer.viewModel
 
 import android.app.Application
 import android.content.ContentResolver
+import android.content.Context
 import android.net.Uri
 import androidx.annotation.StringRes
 import androidx.annotation.VisibleForTesting
+import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
@@ -51,6 +53,20 @@ class PdfViewModel(
         private const val STATE_CONTINUOUS_MODE: String = "continuousMode"
         private const val STATE_DOCUMENT_PROPERTIES = "documentProperties"
         private const val STATE_DOCUMENT_NAME = "documentName"
+
+        private const val PREFS_NAME = "settings"
+        private const val PREF_DARK_DOCUMENT = "dark_document"
+    }
+
+    private val prefs = application.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+    // A display preference rather than per-document state, so it is kept across
+    // documents and app restarts. It records nothing about the files opened.
+    private val _darkDocument = MutableStateFlow(prefs.getBoolean(PREF_DARK_DOCUMENT, false))
+    val darkDocument: StateFlow<Boolean> = _darkDocument.asStateFlow()
+    fun setDarkDocument(value: Boolean) {
+        _darkDocument.value = value
+        prefs.edit { putBoolean(PREF_DARK_DOCUMENT, value) }
     }
 
     val uri: StateFlow<Uri?> = savedStateHandle.getStateFlow(STATE_URI, null)

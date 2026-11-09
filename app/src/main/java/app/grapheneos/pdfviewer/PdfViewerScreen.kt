@@ -252,6 +252,7 @@ fun PdfViewerScreen(
     val page by viewModel.page.collectAsStateWithLifecycle()
     val pageFitMode by viewModel.pageFitMode.collectAsStateWithLifecycle()
     val continuousMode by viewModel.continuousMode.collectAsStateWithLifecycle()
+    val darkDocument by viewModel.darkDocument.collectAsStateWithLifecycle()
     val documentName by viewModel.documentName.collectAsStateWithLifecycle()
     val documentProperties by viewModel.documentProperties.collectAsStateWithLifecycle()
     val outlineStatus by viewModel.outline.collectAsStateWithLifecycle()
@@ -543,6 +544,7 @@ fun PdfViewerScreen(
                 numPages = numPages,
                 pageFitMode = pageFitMode,
                 continuousMode = continuousMode,
+                darkDocument = darkDocument,
                 hasOutline = viewModel.hasOutline(),
                 hasDocumentProperties = documentProperties != null,
                 hasUri = uri != null,
@@ -565,6 +567,9 @@ fun PdfViewerScreen(
                 onFitWidth = { setPageFitMode(viewModel, webView, FIT_MODE_WIDTH) },
                 onContinuousModeChange = {
                     setContinuousMode(viewModel, webView, !continuousMode)
+                },
+                onDarkDocumentChange = {
+                    setDarkDocument(viewModel, webView, !darkDocument)
                 },
                 onRotateClockwise = { rotateDocument(viewModel, webView, 90) },
                 onRotateCounterClockwise = { rotateDocument(viewModel, webView, -90) },
@@ -825,6 +830,11 @@ private fun setContinuousMode(viewModel: PdfViewModel, webView: WebView?, enable
     webView.evaluateJavascript("setContinuousMode($enabled)", null)
 }
 
+private fun setDarkDocument(viewModel: PdfViewModel, webView: WebView?, enabled: Boolean) {
+    viewModel.setDarkDocument(enabled)
+    webView?.evaluateJavascript("setDarkDocument($enabled)", null)
+}
+
 private fun rotateDocument(viewModel: PdfViewModel, webView: WebView?, offset: Int) {
     webView ?: return
     var degrees = (viewModel.documentOrientationDegrees.value + offset) % 360
@@ -871,6 +881,7 @@ private fun PdfTopAppBar(
     numPages: Int,
     pageFitMode: Int,
     continuousMode: Boolean,
+    darkDocument: Boolean,
     hasOutline: Boolean,
     hasDocumentProperties: Boolean,
     hasUri: Boolean,
@@ -886,6 +897,7 @@ private fun PdfTopAppBar(
     onFitPage: () -> Unit,
     onFitWidth: () -> Unit,
     onContinuousModeChange: () -> Unit,
+    onDarkDocumentChange: () -> Unit,
     onRotateClockwise: () -> Unit,
     onRotateCounterClockwise: () -> Unit,
     zoomRatioFlow: StateFlow<Float>,
@@ -1013,6 +1025,16 @@ private fun PdfTopAppBar(
                             }
                         )
                     }
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.action_dark_document)) },
+                        onClick = { onMenuToggle(false); onDarkDocumentChange() },
+                        enabled = enabled,
+                        leadingIcon = {
+                            if (darkDocument) {
+                                Icon(Icons.Default.Check, contentDescription = null)
+                            }
+                        }
+                    )
                     DropdownMenuItem(
                         text = { Text(stringResource(R.string.action_rotate_clockwise)) },
                         onClick = { onMenuToggle(false); onRotateClockwise() },
