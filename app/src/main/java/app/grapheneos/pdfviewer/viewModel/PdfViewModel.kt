@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.FileNotFoundException
@@ -38,9 +39,16 @@ class PdfViewModel(
 ) : AndroidViewModel(application) {
 
     companion object {
+        // Keep these values in sync with the fit-mode constants in viewer/js/index.js.
+        const val FIT_MODE_FREE = 0
+        const val FIT_MODE_PAGE = 1
+        const val FIT_MODE_WIDTH = 2
+
         private const val STATE_URI: String = "uri"
         private const val STATE_PAGE: String = "page"
         private const val STATE_DOCUMENT_ORIENTATION_DEGREES: String = "documentOrientationDegrees"
+        private const val STATE_PAGE_FIT_MODE: String = "pageFitMode"
+        private const val STATE_CONTINUOUS_MODE: String = "continuousMode"
         private const val STATE_DOCUMENT_PROPERTIES = "documentProperties"
         private const val STATE_DOCUMENT_NAME = "documentName"
     }
@@ -48,14 +56,32 @@ class PdfViewModel(
     val uri: StateFlow<Uri?> = savedStateHandle.getStateFlow(STATE_URI, null)
     fun setUri(value: Uri?) { savedStateHandle[STATE_URI] = value }
 
-    val page: StateFlow<Int> = savedStateHandle.getStateFlow(STATE_PAGE, 0)
-    fun setPage(value: Int) { savedStateHandle[STATE_PAGE] = value }
+    // The WebView reports the visible page from its JavaBridge thread while
+    // scrolling, and reads it back synchronously. SavedStateHandle is main-thread
+    // only, so keep the live value in a thread-safe flow and persist it from the
+    // main thread.
+    private val _page = MutableStateFlow(savedStateHandle[STATE_PAGE] ?: 0)
+    val page: StateFlow<Int> = _page.asStateFlow()
+    fun setPage(value: Int) { _page.value = value }
+
+    init {
+        viewModelScope.launch {
+            _page.collect { savedStateHandle[STATE_PAGE] = it }
+        }
+    }
 
     val documentOrientationDegrees: StateFlow<Int> =
         savedStateHandle.getStateFlow(STATE_DOCUMENT_ORIENTATION_DEGREES, 0)
     fun setDocumentOrientationDegrees(value: Int) {
         savedStateHandle[STATE_DOCUMENT_ORIENTATION_DEGREES] = value
     }
+
+    val pageFitMode: StateFlow<Int> = savedStateHandle.getStateFlow(STATE_PAGE_FIT_MODE, FIT_MODE_WIDTH)
+    fun setPageFitMode(value: Int) { savedStateHandle[STATE_PAGE_FIT_MODE] = value }
+
+    val continuousMode: StateFlow<Boolean> =
+        savedStateHandle.getStateFlow(STATE_CONTINUOUS_MODE, true)
+    fun setContinuousMode(value: Boolean) { savedStateHandle[STATE_CONTINUOUS_MODE] = value }
 
     val documentProperties: StateFlow<Map<DocumentProperty, String>?> =
         savedStateHandle.getStateFlow(STATE_DOCUMENT_PROPERTIES, null)
@@ -83,7 +109,7 @@ class PdfViewModel(
     val pageIndicator: StateFlow<Int> = _pageIndicator.asStateFlow()
 
     fun showPageIndicator() {
-        _pageIndicator.value++
+        _pageIndicator.update { it + 1 }
     }
 
     enum class PasswordStatus {
@@ -288,6 +314,8 @@ class PdfViewModel(
         _numPages.value = 0
         _zoomRatio.value = 0f
         setDocumentOrientationDegrees(0)
+        setPageFitMode(FIT_MODE_WIDTH)
+        setContinuousMode(true)
         encryptedDocumentPassword = ""
         clearOutline()
         clearDocumentProperties()

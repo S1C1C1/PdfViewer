@@ -25,6 +25,14 @@ class PdfJsChannel(private val viewModel: PdfViewModel) {
     fun getPage(): Int = viewModel.page.value
 
     @JavascriptInterface
+    fun setCurrentPage(page: Int) {
+        // The WebView is treated as untrusted, so reject impossible pages.
+        if (page !in 1..viewModel.numPages.value) return
+        viewModel.setPage(page)
+        viewModel.showPageIndicator()
+    }
+
+    @JavascriptInterface
     fun getZoomRatio(): Float = viewModel.zoomRatio.value
 
     @JavascriptInterface
@@ -61,6 +69,12 @@ class PdfJsChannel(private val viewModel: PdfViewModel) {
 
     @JavascriptInterface
     fun getDocumentOrientationDegrees(): Int = viewModel.documentOrientationDegrees.value
+
+    @JavascriptInterface
+    fun getPageFitMode(): Int = viewModel.pageFitMode.value
+
+    @JavascriptInterface
+    fun getContinuousMode(): Boolean = viewModel.continuousMode.value
 
     @JavascriptInterface
     fun setNumPages(numPages: Int) {
