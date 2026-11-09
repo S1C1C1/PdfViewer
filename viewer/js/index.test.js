@@ -58,9 +58,25 @@ class FakeElement {
     }
 
     appendChild(child) {
+        if (child.parentElement) {
+            const siblings = child.parentElement.children;
+            siblings.splice(siblings.indexOf(child), 1);
+        }
         child.parentElement = this;
         this.children.push(child);
         return child;
+    }
+
+    append(...children) {
+        for (const child of children) this.appendChild(child);
+    }
+
+    closest(selector) {
+        const className = selector.replace(/^\./, "");
+        for (let e = this; e; e = e.parentElement) {
+            if (e.className === className) return e;
+        }
+        return null;
     }
 
     replaceChildren(...children) {
@@ -193,12 +209,21 @@ async function setupViewer({
     body.clientHeight = 100;
     const documentElement = new FakeElement("html", environment);
 
+    const listeners = {};
+    const addEventListener = (type, listener) => {
+        (listeners[type] ||= []).push(listener);
+    };
+    const selection = { rangeCount: 0, isCollapsed: true, toString: () => "" };
     globalThis.document = {
         body,
         documentElement,
         createElement: (tagName) => new FakeElement(tagName, environment),
         getElementById: (id) => id === "container" ? container : pages,
+        getSelection: () => selection,
+        addEventListener,
     };
+    globalThis.addEventListener = addEventListener;
+    globalThis.Element = FakeElement;
     globalThis.window = globalThis;
     globalThis.innerWidth = 100;
     globalThis.innerHeight = 100;
@@ -210,7 +235,7 @@ async function setupViewer({
         globalThis.scrollX += x;
         globalThis.scrollY += y;
     };
-    globalThis.getSelection = () => ({ toString: () => "" });
+    globalThis.getSelection = () => selection;
     globalThis.IntersectionObserver = class {
         observe() {}
         disconnect() {}
@@ -259,7 +284,10 @@ async function setupViewer({
     await import("./index.js");
     globalThis.loadDocument();
     await flushPromises();
-    return { state, pagesElement: pages, pdfDocument, body };
+    const dispatch = (type, event = {}) => {
+        for (const listener of listeners[type] || []) listener(event);
+    };
+    return { state, pagesElement: pages, pdfDocument, body, selection, dispatch };
 }
 
 afterEach(() => {
@@ -662,5 +690,64 @@ describe("dark document", () => {
         globalThis.setDarkDocument("true");
 
         expect(body.classList.contains("dark-document")).toBe(false);
+    });
+});
+
+describe("text selection helper", () => {
+    it("ends each rendered text layer with the end-of-content helper", async () => {
+        const { pagesElement } = await setupViewer({ pageCount: 2 });
+        await flushPromises();
+
+        const textLayer = pagesElement.children[0].children[1];
+        expect(textLayer.children.at(-1).className).toBe("endOfContent");
+    });
+
+    it("keeps one helper per layer across re-renders", async () => {
+        const { state, pagesElement } = await setupViewer({ pageCount: 2 });
+        await flushPromises();
+        state.fitMode = 0;
+        state.zoom = 1;
+        globalThis.onRenderPage(1);
+        await flushPromises();
+
+        const textLayer = pagesElement.children[0].children[1];
+        const helpers = textLayer.children.filter((c) => c.className === "endOfContent");
+        expect(helpers.length).toBe(1);
+        expect(textLayer.children.at(-1)).toBe(helpers[0]);
+    });
+
+    it("turns on for all pages when a drag starts on a text layer", async () => {
+        const { pagesElement, dispatch } = await setupViewer({ pageCount: 2 });
+        await flushPromises();
+        const textLayer = pagesElement.children[0].children[1];
+
+        dispatch("pointerdown", { target: textLayer });
+        expect(pagesElement.classList.contains("selecting")).toBe(true);
+
+        dispatch("pointerup");
+        expect(pagesElement.classList.contains("selecting")).toBe(false);
+    });
+
+    it("ignores presses outside text layers", async () => {
+        const { pagesElement, dispatch } = await setupViewer({ pageCount: 2 });
+        await flushPromises();
+
+        dispatch("pointerdown", { target: pagesElement });
+
+        expect(pagesElement.classList.contains("selecting")).toBe(false);
+    });
+
+    it("follows the selection while handles are dragged", async () => {
+        const { pagesElement, selection, dispatch } = await setupViewer({ pageCount: 2 });
+        await flushPromises();
+
+        selection.rangeCount = 1;
+        selection.isCollapsed = false;
+        dispatch("selectionchange");
+        expect(pagesElement.classList.contains("selecting")).toBe(true);
+
+        selection.isCollapsed = true;
+        dispatch("selectionchange");
+        expect(pagesElement.classList.contains("selecting")).toBe(false);
     });
 });
